@@ -63,12 +63,6 @@ def load_resume(state:ResumeState):
 
 
 
-def chunk_resume(state:ResumeState):
-    splitter=RecursiveCharacterTextSplitter(chunk_size=1000,chunk_overlap=200)
-    chunks=splitter.split_text(state["raw_text"]) 
-    return {"chunks":chunks} 
-
-
 def extract_metadata(state: ResumeState):
 
     prompt = ChatPromptTemplate.from_template(
@@ -263,36 +257,6 @@ graph_builder.add_edge("ats_score",END)
 
 graph = graph_builder.compile()
 
-resume_folder = Path(r"C:\Users\008257\Downloads\resumes")
-
-all_results = []
-
-for pdf in resume_folder.glob("*.pdf"):
-
-    print(f"\nProcessing: {pdf.name}")
-
-    result = graph.invoke({
-        "file_path": str(pdf),
-        "job_description": job_description
-    })
-
-    all_results.append({
-    "name": result["candidate_name"],
-    "email": result["email"],
-    "phone": result["phone"],
-    "resume": pdf.name,
-    "ats_score": result["ats_score"],
-    "match_percentage": result["match_percentage"],
-    "matched_skills": ",".join(result["matched_skills"]),
-    "missing_skills": ",".join(result["missing_skills"]),
-    "recommendation": result["hiring_recommendation"]
-})
-
-
-all_results.sort(
-    key=lambda x: x["ats_score"],
-    reverse=True
-)
 
 print("\n===== FINAL RANKING =====")
 
