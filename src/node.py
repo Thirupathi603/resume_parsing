@@ -243,7 +243,6 @@ Nice to Have:
 
 graph_builder= StateGraph(ResumeState)
 graph_builder.add_node("load_resume",load_resume)
-graph_builder.add_node("chunk_resume", chunk_resume)
 graph_builder.add_node("extract_resume",extract_metadata)
 graph_builder.add_node("validate_resume",validate_resume)
 graph_builder.add_node("ats_score",ats_scoring)
@@ -259,16 +258,6 @@ graph = graph_builder.compile()
 
 
 print("\n===== FINAL RANKING =====")
-
-for rank, candidate in enumerate(all_results, start=1):
-
-    print(f"\nRank #{rank}")
-
-    print("Candidate :", candidate["name"])
-    print("Resume    :", candidate["resume"])
-    print("ATS Score :", candidate["ats_score"])
-    print("Match %   :", candidate["match_percentage"])
-    print("Decision  :", candidate["recommendation"])
 
 
 print("\n===== ATS ROUTER TEST =====")
