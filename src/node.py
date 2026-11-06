@@ -1,9 +1,8 @@
 from pathlib import Path
 import re,json
-from turtle import st
-from urllib import response
 import streamlit as st
 import tempfile
+import pandas as pd
 
 from langchain_text_splitters import (
     RecursiveCharacterTextSplitter
@@ -19,10 +18,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 llm = ChatOpenAI(model="gpt-4o-mini",temperature=0)
-
-response=llm.invoke("hello")
-
-print(response.content)
 
 class ResumeState(TypedDict):
     file_path: str
@@ -248,60 +243,12 @@ graph_builder.add_node("validate_resume",validate_resume)
 graph_builder.add_node("ats_score",ats_scoring)
 
 graph_builder.add_edge(START, "load_resume")
-graph_builder.add_edge("load_resume", "chunk_resume")
-graph_builder.add_edge("chunk_resume","extract_resume")
-graph_builder.add_edge("extract_resume","validate_resume")
-graph_builder.add_edge("validate_resume", "ats_score") 
+graph_builder.add_edge("load_resume","extract_resume")
+graph_builder.add_edge("extract_resume", "validate_resume") 
+graph_builder.add_edge("validate_resume", "ats_score")
 graph_builder.add_edge("ats_score",END)
 
 graph = graph_builder.compile()
-
-
-print("\n===== FINAL RANKING =====")
-
-
-print("\n===== ATS ROUTER TEST =====")
-
-
-import pandas as pd
-
-df = pd.DataFrame(all_results)
-
-df.to_excel(
-    "resume_ranking.xlsx",
-    index=False
-)
-
-print("Ranking saved successfully")
-
-col1, col2, col3 = st.columns(3)
-
-col1.metric(
-    "Total Resumes",
-    len(df)
-)
-
-col2.metric(
-    "Average ATS",
-    round(df["ats_score"].mean(), 2)
-)
-
-col3.metric(
-    "Top Score",
-    df["ats_score"].max()
-)
-
-st.set_page_config(
-    page_title="HR Resume Intelligence Platform",
-    layout="wide"
-)
-search = st.text_input("Search Candidate")
-df[
-    df["name"]
-        .str.contains(search,
-                      case=False,
-                      na=False)
-]
 st.title("HR Resume Intelligence Platform")
 
 job_description = st.text_area(
@@ -351,13 +298,41 @@ if uploaded_files:
         reverse=True
     )
 
-    import pandas as pd
-
     df = pd.DataFrame(all_results)
+
+    search = st.text_input("Search Candidate")
+
+    if search:
+        filtered_df = df[
+            df["name"].str.contains(
+                search,
+                case=False,
+                na=False
+            )
+        ]
+    else:
+        filtered_df = df
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric(
+        "Total Resumes",
+        len(filtered_df)
+    )
+
+    col2.metric(
+        "Average ATS",
+        round(filtered_df["ats_score"].mean(), 2)
+    )
+
+    col3.metric(
+        "Top ATS",
+        filtered_df["ats_score"].max()
+    )
 
     st.subheader("Resume Ranking")
 
-    st.dataframe(df)
+    st.dataframe(filtered_df)
 
     df.to_excel(
         "resume_ranking.xlsx",
@@ -365,12 +340,12 @@ if uploaded_files:
     )
 
     with open("resume_ranking.xlsx", "rb") as f:
-
         st.download_button(
             "Download Ranking",
             f,
             "resume_ranking.xlsx"
         )
+   
 
 
 
