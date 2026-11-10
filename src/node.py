@@ -1,5 +1,6 @@
 from pathlib import Path
 import re,json
+from requests import get
 import streamlit as st
 import tempfile
 import pandas as pd
@@ -16,6 +17,67 @@ from langgraph.graph import StateGraph, START, END
 from typing import TypedDict,List
 from dotenv import load_dotenv 
 load_dotenv()
+from db import get_connection
+conn = get_connection()
+print("DB Connected")
+def save_candidate(result, resume_name, resume_path):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        INSERT INTO candidates
+        (
+            candidate_name,
+            email,
+            phone,
+            resume_file_name,
+            resume_file_path,
+            ats_score,
+            match_percentage,
+            skills,
+            education,
+            experience,
+            projects,
+            matched_skills,
+            missing_skills,
+            strengths,
+            weaknesses,
+            hiring_recommendation
+        )
+        VALUES
+        (
+            %s,%s,%s,%s,%s,%s,%s,
+            %s,%s,%s,%s,%s,%s,%s,%s,%s
+        )
+        """,
+        (
+            result["candidate_name"],
+            result["email"],
+            result["phone"],
+            resume_name,
+            resume_path,
+            result["ats_score"],
+            result["match_percentage"],
+
+            json.dumps(result["skills"]),
+            json.dumps(result["education"]),
+            json.dumps(result["experience"]),
+            json.dumps(result["projects"]),
+
+            json.dumps(result["matched_skills"]),
+            json.dumps(result["missing_skills"]),
+            json.dumps(result["strengths"]),
+            json.dumps(result["weaknesses"]),
+
+            result["hiring_recommendation"]
+        )
+    )
+
+    conn.commit()
+    cur.close()
+    conn.close()
 
 llm = ChatOpenAI(model="gpt-4o-mini",temperature=0)
 
@@ -41,6 +103,7 @@ class ResumeState(TypedDict):
     strengths: List[str]
     weaknesses: List[str]
     hiring_recommendation: str
+    uploaded_at: list[str]
 
 def load_resume(state:ResumeState):
 
@@ -251,8 +314,114 @@ graph_builder.add_edge("ats_score",END)
 graph = graph_builder.compile()
 st.title("HR Resume Intelligence Platform")
 
+page = st.sidebar.selectbox(
+    "Navigation",
+    [
+        "ATS Analysis",
+        "Dashboard"
+    ]
+)
+
+# =====================================================
+# DASHBOARD PAGE
+# =====================================================
+
+if page == "Dashboard":
+
+    st.header("Candidate Dashboard")
+
+    try:
+        conn = get_connection()
+
+        df = pd.read_sql(
+            """
+            SELECT *
+            FROM candidates
+            ORDER BY ats_score DESC
+            """,
+            conn
+        )
+
+        conn.close()
+
+        st.success(f"Rows fetched: {len(df)}")
+
+        st.write("Columns:")
+        st.write(df.columns.tolist())
+
+        if df.empty:
+            st.warning("No candidates found in database.")
+            st.stop()
+
+        search = st.text_input("Search Candidate")
+        filtered_df = (df.sort_values("id", ascending=False).drop_duplicates(subset=["email"], keep="first"))
+
+        if search:
+            filtered_df = df[
+                df["candidate_name"].str.contains(
+                    search,
+                    case=False,
+                    na=False
+                )
+            ]
+        else:
+            filtered_df = df
+
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric(
+            "Total Candidates",
+            len(filtered_df)
+        )
+
+        col2.metric(
+            "Average ATS",
+            round(filtered_df["ats_score"].mean(), 2)
+        )
+
+        col3.metric(
+            "Top ATS",
+            filtered_df["ats_score"].max()
+        )
+
+        st.subheader("Candidate Ranking")
+
+        st.dataframe(
+            filtered_df,
+            use_container_width=True
+        )
+
+        # Excel Download
+        excel_file = "resume_ranking.xlsx"
+
+        filtered_df.to_excel(
+            excel_file,
+            index=False
+        )
+
+        with open(excel_file, "rb") as f:
+            st.download_button(
+                label="Download Ranking",
+                data=f,
+                file_name="resume_ranking.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+    except Exception as e:
+        st.error(f"Database Error: {e}")
+
+    st.stop()
+
+
+# =====================================================
+# ATS ANALYSIS PAGE
+# =====================================================
+
+st.header("ATS Resume Analysis")
+
 job_description = st.text_area(
     "Paste Job Description",
+    value=job_description,
     height=300
 )
 
@@ -266,7 +435,9 @@ if uploaded_files:
 
     all_results = []
 
-    for uploaded_file in uploaded_files:
+    progress = st.progress(0)
+
+    for idx, uploaded_file in enumerate(uploaded_files):
 
         with tempfile.NamedTemporaryFile(
             delete=False,
@@ -276,81 +447,124 @@ if uploaded_files:
             tmp.write(uploaded_file.read())
             temp_path = tmp.name
 
-        result = graph.invoke({
-            "file_path": temp_path,
-            "job_description": job_description
-        })
+        try:
 
-        all_results.append({
-            "name": result["candidate_name"],
-            "email": result["email"],
-            "phone": result["phone"],
-            "resume": uploaded_file.name,
-            "ats_score": result["ats_score"],
-            "match_percentage": result["match_percentage"],
-            "matched_skills": ",".join(result["matched_skills"]),
-            "missing_skills": ",".join(result["missing_skills"]),
-            "recommendation": result["hiring_recommendation"]
-        })
-
-    all_results.sort(
-        key=lambda x: x["ats_score"],
-        reverse=True
-    )
-
-    df = pd.DataFrame(all_results)
-
-    search = st.text_input("Search Candidate")
-
-    if search:
-        filtered_df = df[
-            df["name"].str.contains(
-                search,
-                case=False,
-                na=False
+            result = graph.invoke(
+                {
+                    "file_path": temp_path,
+                    "job_description": job_description
+                }
             )
-        ]
-    else:
-        filtered_df = df
 
-    col1, col2, col3 = st.columns(3)
+            try:
 
-    col1.metric(
-        "Total Resumes",
-        len(filtered_df)
-    )
+                save_candidate(
+                    result,
+                    uploaded_file.name,
+                    temp_path
+                )
 
-    col2.metric(
-        "Average ATS",
-        round(filtered_df["ats_score"].mean(), 2)
-    )
+                st.success(
+                    f"Saved {result['candidate_name']} to database"
+                )
 
-    col3.metric(
-        "Top ATS",
-        filtered_df["ats_score"].max()
-    )
+            except Exception as db_error:
 
-    st.subheader("Resume Ranking")
+                st.error(
+                    f"Database Save Failed: {db_error}"
+                )
 
-    st.dataframe(filtered_df)
+            all_results.append(
+                {
+                    "Name": result["candidate_name"],
+                    "Email": result["email"],
+                    "Phone": result["phone"],
+                    "Resume": uploaded_file.name,
+                    "ATS Score": result["ats_score"],
+                    "Match %": result["match_percentage"],
+                    "Matched Skills": ", ".join(
+                        result["matched_skills"]
+                    ),
+                    "Missing Skills": ", ".join(
+                        result["missing_skills"]
+                    ),
+                    "Recommendation": result["hiring_recommendation"]
+                }
+            )
 
-    df.to_excel(
-        "resume_ranking.xlsx",
-        index=False
-    )
+        except Exception as e:
 
-    with open("resume_ranking.xlsx", "rb") as f:
-        st.download_button(
-            "Download Ranking",
-            f,
-            "resume_ranking.xlsx"
+            st.error(
+                f"Failed processing {uploaded_file.name}: {e}"
+            )
+
+        progress.progress(
+            (idx + 1) / len(uploaded_files)
         )
-   
 
+    if all_results:
 
+        ranking_df = pd.DataFrame(all_results)
 
+        ranking_df = ranking_df.sort_values(
+            by="ATS Score",
+            ascending=False
+        )
 
- 
+        search_name = st.text_input(
+            "Search Candidate Ranking"
+        )
 
+        if search_name:
 
+            ranking_df = ranking_df[
+                ranking_df["Name"].str.contains(
+                    search_name,
+                    case=False,
+                    na=False
+                )
+            ]
 
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric(
+            "Total Resumes",
+            len(ranking_df)
+        )
+
+        col2.metric(
+            "Average ATS",
+            round(
+                ranking_df["ATS Score"].mean(),
+                2
+            )
+        )
+
+        col3.metric(
+            "Highest ATS",
+            ranking_df["ATS Score"].max()
+        )
+
+        st.subheader("Resume Ranking")
+
+        st.dataframe(
+            ranking_df,
+            use_container_width=True
+        )
+
+        ranking_df.to_excel(
+            "resume_ranking.xlsx",
+            index=False
+        )
+
+        with open(
+            "resume_ranking.xlsx",
+            "rb"
+        ) as f:
+
+            st.download_button(
+                "Download Ranking",
+                data=f,
+                file_name="resume_ranking.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
